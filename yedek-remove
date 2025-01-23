@@ -1,0 +1,149 @@
+from flask import Flask, request, jsonify, send_file
+from flask_cors import CORS
+from rembg import remove
+from PIL import Image
+import os
+import base64
+import requests
+from io import BytesIO
+from werkzeug.utils import secure_filename
+from datetime import datetime
+import uuid
+import threading
+import time
+
+app = Flask(__name__)
+CORS(app)
+
+# Geçici klasörleri kullan
+UPLOAD_FOLDER = '/tmp/uploads'
+OUTPUT_FOLDER = '/tmp/outputs'
+
+# Temizleme süresi (15 dakika = 900 saniye)
+CLEANUP_INTERVAL = 900
+
+def cleanup_old_files():
+    while True:
+        try:
+            current_time = datetime.now().timestamp()
+            for folder in [UPLOAD_FOLDER, OUTPUT_FOLDER]:
+                for filename in os.listdir(folder):
+                    file_path = os.path.join(folder, filename)
+                    # Dosya yaşını kontrol et
+                    if os.path.exists(file_path):
+                        creation_time = os.path.getctime(file_path)
+                        if current_time - creation_time > CLEANUP_INTERVAL:
+                            os.remove(file_path)
+        except Exception as e:
+            print(f"Temizleme hatası: {e}")
+        time.sleep(CLEANUP_INTERVAL)
+
+# Temizleme thread'ini başlat
+cleanup_thread = threading.Thread(target=cleanup_old_files, daemon=True)
+cleanup_thread.start()
+
+ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'webp'}
+
+def allowed_file(filename):
+    return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
+
+def process_base64_image(base64_string):
+    # Base64 başlığını kaldır
+    if 'base64,' in base64_string:
+        base64_string = base64_string.split('base64,')[1]
+    image_data = base64.b64decode(base64_string)
+    return Image.open(BytesIO(image_data))
+
+def process_url_image(url):
+    response = requests.get(url)
+    return Image.open(BytesIO(response.content))
+
+@app.route('/')
+def home():
+    return jsonify({'status': 'running'})
+
+@app.route('/remove-background', methods=['POST'])
+def remove_background():
+    try:
+        # Sunucu URL'sini belirle
+        is_production = 'pythonanywhere.com' in request.host_url
+        base_url = 'https://muratbaba.pythonanywhere.com' if is_production else request.host_url.rstrip('/')
+
+        input_image = None
+        original_filename = None
+
+        # Content type kontrolü
+        content_type = request.headers.get('Content-Type', '')
+
+        if 'multipart/form-data' in content_type:
+            if 'image' not in request.files:
+                return jsonify({'error': 'Dosya yüklenmedi'}), 400
+
+            file = request.files['image']
+            if file.filename == '':
+                return jsonify({'error': 'Dosya seçilmedi'}), 400
+            if not allowed_file(file.filename):
+                return jsonify({'error': 'Geçersiz dosya formatı'}), 400
+
+            original_filename = secure_filename(file.filename)
+            input_image = Image.open(file)
+
+        elif 'application/json' in content_type:
+            data = request.get_json()
+            if not data:
+                return jsonify({'error': 'Geçersiz JSON verisi'}), 400
+
+            if 'base64_image' in data:
+                input_image = process_base64_image(data['base64_image'])
+                original_filename = 'image_from_base64.png'
+            elif 'image_url' in data:
+                input_image = process_url_image(data['image_url'])
+                original_filename = 'image_from_url.png'
+            else:
+                return jsonify({'error': 'JSON içinde base64_image veya image_url bulunamadı'}), 400
+        else:
+            return jsonify({'error': 'Desteklenmeyen Content-Type. multipart/form-data veya application/json kullanın'}), 415
+
+        if input_image is None:
+            return jsonify({'error': 'Görsel işlenemedi'}), 400
+
+        # Benzersiz dosya adı oluştur
+        unique_filename = f"{uuid.uuid4()}_{original_filename}"
+
+        # Arka planı kaldır
+        output_image = remove(input_image)
+
+        # Dosyayı kaydet
+        output_filename = f"removed_{unique_filename}"
+        output_path = os.path.join(OUTPUT_FOLDER, output_filename)
+        output_image.save(output_path, format="PNG")
+
+        # Base64 dönüşümü
+        buffered = BytesIO()
+        output_image.save(buffered, format="PNG")
+        img_str = base64.b64encode(buffered.getvalue()).decode()
+
+        # URL oluştur
+        image_url = f"{base_url}/get-image/{output_filename}"
+
+        return jsonify({
+            'image_url': image_url,
+            'success': True,
+            'message': 'Success',
+            'image_base64': f'data:image/png;base64,{img_str}',
+
+        })
+
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+# Get-image endpoint'ini geri ekleyelim
+@app.route('/get-image/<filename>')
+def get_image(filename):
+    try:
+        return send_file(os.path.join(OUTPUT_FOLDER, filename))
+    except Exception as e:
+        return jsonify({'error': str(e)}), 404
+
+if __name__ == '__main__':
+    app.run(debug=True)
