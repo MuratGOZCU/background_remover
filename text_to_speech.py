@@ -1,12 +1,8 @@
 import whisper
-import urllib.request
 import os
+from flask import Flask, request, jsonify
 
-def download_audio(url, output_path):
-    """Download audio file from URL"""
-    print("Downloading audio file...")
-    urllib.request.urlretrieve(url, output_path)
-    print("Download completed!")
+app = Flask(__name__)
 
 def transcribe_audio(audio_path, model_name="base"):
     """Transcribe audio file using Whisper model"""
@@ -18,26 +14,38 @@ def transcribe_audio(audio_path, model_name="base"):
     
     return result["text"]
 
-def main():
-    # Audio file URL and path
-    audio_url = "https://storage.googleapis.com/falserverless/model_tests/whisper/dinner_conversation.mp3"
-    audio_path = "dinner_conversation.mp3"
+@app.route('/transcribe', methods=['POST'])
+def handle_transcription():
+    if 'audio' not in request.files:
+        return jsonify({'error': 'No audio file provided'}), 400
     
-    # Download audio if not exists
-    if not os.path.exists(audio_path):
-        download_audio(audio_url, audio_path)
+    audio_file = request.files['audio']
     
-    # Transcribe audio
-    transcription = transcribe_audio(audio_path)
+    if audio_file.filename == '':
+        return jsonify({'error': 'No selected file'}), 400
+        
+    # Geçici dosya yolu oluştur
+    temp_audio_path = "temp_audio_file"
     
-    print("\nTranscription:")
-    print("-" * 50)
-    print(transcription)
-    
-    # Optionally save transcription to file
-    with open("transcription.txt", "w", encoding="utf-8") as f:
-        f.write(transcription)
-    print("\nTranscription saved to transcription.txt")
+    try:
+        # Gelen dosyayı kaydet
+        audio_file.save(temp_audio_path)
+        
+        # Transcribe işlemini gerçekleştir
+        transcription = transcribe_audio(temp_audio_path)
+        
+        # Geçici dosyayı sil
+        os.remove(temp_audio_path)
+        
+        return jsonify({
+            'success': True,
+            'transcription': transcription
+        })
+        
+    except Exception as e:
+        if os.path.exists(temp_audio_path):
+            os.remove(temp_audio_path)
+        return jsonify({'error': str(e)}), 500
 
 if __name__ == "__main__":
-    main()
+    app.run(debug=True)
