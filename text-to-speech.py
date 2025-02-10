@@ -358,18 +358,32 @@ limiter = Limiter(
 )
 
 def cleanup_old_files(filepath, delay=600):  # 600 seconds = 10 minutes
-    """Delete the audio file after specified delay"""
-    def delete_file():
-        time.sleep(delay)
-        try:
-            if os.path.exists(filepath):
-                os.remove(filepath)
-                print(f"Deleted file: {filepath}")
-        except Exception as e:
-            print(f"Error deleting file {filepath}: {e}")
+    """Delete audio files older than 10 minutes"""
+    def delete_old_files():
+        while True:
+            try:
+                current_time = time.time()
+                # Check all mp3 files in voice directory
+                for file in glob.glob(os.path.join(VOICE_DIR, "*.mp3")):
+                    # Get file creation time
+                    creation_time = os.path.getctime(file)
+                    # If file is older than 10 minutes, delete it
+                    if current_time - creation_time > delay:
+                        try:
+                            os.remove(file)
+                            print(f"Deleted old file: {file}")
+                        except Exception as e:
+                            print(f"Error deleting file {file}: {e}")
+                
+                # Sleep for 60 seconds before next check
+                time.sleep(60)
+                
+            except Exception as e:
+                print(f"Error in cleanup thread: {e}")
+                time.sleep(60)  # Wait a bit before retrying if there's an error
 
-    # Start deletion thread
-    thread = threading.Thread(target=delete_file)
+    # Start cleanup thread
+    thread = threading.Thread(target=delete_old_files)
     thread.daemon = True
     thread.start()
 
@@ -401,7 +415,7 @@ def text_to_speech(text, voice="en", gender="female"):
         if not os.path.exists(filepath):
             raise FileNotFoundError(f"Failed to create audio file at {filepath}")
 
-        # Schedule file cleanup after 10 minutes
+        # Schedule file cleanup (now only needs filepath for logging)
         cleanup_old_files(filepath)
 
         file_url = request.host_url + f"voice/{filename}"
