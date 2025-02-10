@@ -6,7 +6,7 @@ from deep_translator.exceptions import RequestError
 def translate_tr_to_es():
     # JSON dosyasını oku
     try:
-        with open('data.json', 'r', encoding='utf-8') as file:
+        with open('uploads/data.json', 'r', encoding='utf-8') as file:
             data = json.load(file)
     except FileNotFoundError:
         print("data.json dosyası bulunamadı!")
@@ -16,18 +16,18 @@ def translate_tr_to_es():
         return
 
     # Çevirmen nesnesini oluştur
-    translator = GoogleTranslator(source='tr', target='nl')
+    translator = GoogleTranslator(source='tr', target='kk')
     
     # TR verilerini ES'e çevir
     if "tr" in data:
         # Mevcut çevirileri kontrol et
         try:
-            with open('data_with_nl.json', 'r', encoding='utf-8') as file:
+            with open('data_with_kk.json', 'r', encoding='utf-8') as file:
                 existing_data = json.load(file)
-                translated_ids = {item["id"] for item in existing_data.get("nl", [])}
+                translated_ids = {item["id"] for item in existing_data.get("kk", [])}
         except FileNotFoundError:
             translated_ids = set()
-            existing_data = {"nl": []}
+            existing_data = {"kk": []}
 
         for item in data["tr"]:
             if item["id"] in translated_ids:
@@ -43,14 +43,14 @@ def translate_tr_to_es():
                         "correctAnswer": translator.translate(item["correctAnswer"]),
                         "options": [translator.translate(option) for option in item["options"]],
                         "example": {
-                            "nl": translator.translate(item["example"]["tr"]),
+                            "kk": translator.translate(item["example"]["tr"]),
                             "en": item["example"]["en"]
                         }
                     }
-                    existing_data["nl"].append(es_item)
+                    existing_data["kk"].append(es_item)
                     
                     # Her başarılı çeviriden sonra dosyayı güncelle
-                    with open('data_with_nl.json', 'w', encoding='utf-8') as file:
+                    with open('data_with_kk.json', 'w', encoding='utf-8') as file:
                         json.dump(existing_data, file, ensure_ascii=False, indent=2)
                     
                     print(f"Çevrilen id: {item['id']}")
@@ -69,9 +69,9 @@ def translate_tr_to_es():
 
     # Sonuçları yeni bir JSON dosyasına kaydet
     try:
-        with open('data_with_nl.json', 'w', encoding='utf-8') as file:
+        with open('data_with_kk.json', 'w', encoding='utf-8') as file:
             json.dump(existing_data, file, ensure_ascii=False, indent=2)
-        print("Çeviri tamamlandı! Sonuçlar data_with_nl.json dosyasına kaydedildi.")
+        print("Çeviri tamamlandı! Sonuçlar data_with_kk.json dosyasına kaydedildi.")
     except Exception as e:
         print(f"Dosya kaydetme hatası: {e}")
 

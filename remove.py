@@ -12,13 +12,27 @@ import uuid
 import threading
 import time
 from functools import wraps
+import whisper
 
 app = Flask(__name__)
 CORS(app)
 
-# Geçici klasörleri kullan
-UPLOAD_FOLDER = '/tmp/uploads'
-OUTPUT_FOLDER = '/tmp/outputs'
+# Varsayılan klasör yollarını tanımla
+UPLOAD_FOLDER = 'uploads'
+OUTPUT_FOLDER = 'outputs'
+
+# Klasörleri oluştur
+try:
+    os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+    os.makedirs(OUTPUT_FOLDER, exist_ok=True)
+except Exception as e:
+    print(f"Klasör oluşturma hatası: {e}")
+
+def get_folders():
+    """Request context'inde çalışacak şekilde klasör yollarını belirle"""
+    if request and 'pythonanywhere.com' in request.host_url:
+        return '/home/muratbaba/mysite/uploads', '/home/muratbaba/mysite/outputs'
+    return UPLOAD_FOLDER, OUTPUT_FOLDER
 
 # Temizleme süresi (15 dakika = 900 saniye)
 CLEANUP_INTERVAL = 900
@@ -27,14 +41,15 @@ def cleanup_old_files():
     while True:
         try:
             current_time = datetime.now().timestamp()
-            for folder in [UPLOAD_FOLDER, OUTPUT_FOLDER]:
-                for filename in os.listdir(folder):
-                    file_path = os.path.join(folder, filename)
-                    # Dosya yaşını kontrol et
-                    if os.path.exists(file_path):
-                        creation_time = os.path.getctime(file_path)
-                        if current_time - creation_time > CLEANUP_INTERVAL:
-                            os.remove(file_path)
+            upload_folder, output_folder = UPLOAD_FOLDER, OUTPUT_FOLDER
+            for folder in [upload_folder, output_folder]:
+                if os.path.exists(folder):
+                    for filename in os.listdir(folder):
+                        file_path = os.path.join(folder, filename)
+                        if os.path.exists(file_path):
+                            creation_time = os.path.getctime(file_path)
+                            if current_time - creation_time > CLEANUP_INTERVAL:
+                                os.remove(file_path)
         except Exception as e:
             print(f"Temizleme hatası: {e}")
         time.sleep(CLEANUP_INTERVAL)
@@ -110,9 +125,8 @@ def home():
 @require_api_key
 def remove_background():
     try:
-        # Sunucu URL'sini belirle
-        is_production = 'pythonanywhere.com' in request.host_url
-        base_url = 'https://muratbaba.pythonanywhere.com' if is_production else request.host_url.rstrip('/')
+        # Her request için doğru klasör yollarını al
+        upload_folder, output_folder = get_folders()
 
         input_image = None
         original_filename = None
@@ -187,7 +201,7 @@ def remove_background():
 
         # Dosyayı kaydet
         output_filename = f"removed_{unique_filename}"
-        output_path = os.path.join(OUTPUT_FOLDER, output_filename)
+        output_path = os.path.join(output_folder, output_filename)
         output_image.save(output_path, format="PNG")
 
         # Base64 dönüşümü
@@ -196,15 +210,13 @@ def remove_background():
         img_str = base64.b64encode(buffered.getvalue()).decode()
 
         # URL oluştur
-        image_url = f"{base_url}/get-image/{output_filename}"
+        image_url = f"{request.host_url.rstrip('/')}/get-image/{output_filename}"
 
         return jsonify({
             'success': True,
             'message': 'Success',
             'image_base64': f'data:image/png;base64,{img_str}',
             'image_url': image_url,
-
-
         })
 
     except Exception as e:
@@ -305,9 +317,93 @@ def remove_background_free():
 @app.route('/get-image/<filename>')
 def get_image(filename):
     try:
-        return send_file(os.path.join(OUTPUT_FOLDER, filename))
+        _, output_folder = get_folders()
+        return send_file(os.path.join(output_folder, filename))
     except Exception as e:
         return jsonify({'error': str(e)}), 404
+
+
+# Whisper model singleton class
+class WhisperModelSingleton:
+    _instance = None
+    _model = None
+
+    @classmethod
+    def get_instance(cls, model_name="base"):
+        if cls._instance is None:
+            cls._instance = cls()
+            try:
+                print(f"Loading Whisper {model_name} model...")
+                cls._model = whisper.load_model(model_name)
+                if cls._model is None:
+                    raise Exception("Model loading failed")
+            except Exception as e:
+                print(f"Error loading model: {e}")
+                cls._instance = None
+                raise
+        return cls._instance
+
+    def transcribe(self, audio_path):
+        if self._model is None:
+            raise Exception("Model not properly initialized")
+        return self._model.transcribe(audio_path)
+
+def transcribe_audio(audio_path, model_name="base"):
+    """Transcribe audio file using Whisper model singleton"""
+    try:
+        model_singleton = WhisperModelSingleton.get_instance(model_name)
+        if model_singleton is None:
+            raise Exception("Failed to initialize Whisper model")
+            
+        print("Transcribing audio...")
+        result = model_singleton.transcribe(audio_path)
+        if result is None:
+            raise Exception("Transcription failed")
+            
+        return result["text"]
+    except Exception as e:
+        print(f"Transcription error: {e}")
+        raise
+
+@app.route('/transcribe', methods=['POST'])
+def handle_transcription():
+    if 'audio' not in request.files:
+        return jsonify({'error': 'No audio file provided'}), 400
+    
+    audio_file = request.files['audio']
+    temp_audio_path = None
+    
+    if audio_file.filename == '':
+        return jsonify({'error': 'No selected file'}), 400
+    
+    try:
+        # Geçici dosya yolu oluştur
+        temp_audio_path = os.path.join(UPLOAD_FOLDER, f'temp_audio_{uuid.uuid4()}.wav')
+        
+        # Gelen dosyayı kaydet
+        audio_file.save(temp_audio_path)
+        
+        # Transcribe işlemini gerçekleştir
+        transcription = transcribe_audio(temp_audio_path, model_name="base")
+        
+        if not transcription:
+            raise Exception("Empty transcription result")
+            
+        return jsonify({
+            'success': True,
+            'transcription': transcription
+        })
+        
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': f"Transcription failed: {str(e)}"
+        }), 500
+    finally:
+        # Geçici dosyayı temizle
+        if temp_audio_path and os.path.exists(temp_audio_path):
+            os.remove(temp_audio_path)
+
 
 if __name__ == '__main__':
     app.run(debug=True)
