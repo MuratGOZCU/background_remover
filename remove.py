@@ -12,7 +12,6 @@ import uuid
 import threading
 import time
 from functools import wraps
-import whisper
 
 app = Flask(__name__)
 CORS(app)
@@ -321,88 +320,6 @@ def get_image(filename):
         return send_file(os.path.join(output_folder, filename))
     except Exception as e:
         return jsonify({'error': str(e)}), 404
-
-
-# Whisper model singleton class
-class WhisperModelSingleton:
-    _instance = None
-    _model = None
-
-    @classmethod
-    def get_instance(cls, model_name="base"):
-        if cls._instance is None:
-            cls._instance = cls()
-            try:
-                print(f"Loading Whisper {model_name} model...")
-                cls._model = whisper.load_model(model_name)
-                if cls._model is None:
-                    raise Exception("Model loading failed")
-            except Exception as e:
-                print(f"Error loading model: {e}")
-                cls._instance = None
-                raise
-        return cls._instance
-
-    def transcribe(self, audio_path):
-        if self._model is None:
-            raise Exception("Model not properly initialized")
-        return self._model.transcribe(audio_path)
-
-def transcribe_audio(audio_path, model_name="base"):
-    """Transcribe audio file using Whisper model singleton"""
-    try:
-        model_singleton = WhisperModelSingleton.get_instance(model_name)
-        if model_singleton is None:
-            raise Exception("Failed to initialize Whisper model")
-            
-        print("Transcribing audio...")
-        result = model_singleton.transcribe(audio_path)
-        if result is None:
-            raise Exception("Transcription failed")
-            
-        return result["text"]
-    except Exception as e:
-        print(f"Transcription error: {e}")
-        raise
-
-@app.route('/transcribe', methods=['POST'])
-def handle_transcription():
-    if 'audio' not in request.files:
-        return jsonify({'error': 'No audio file provided'}), 400
-    
-    audio_file = request.files['audio']
-    temp_audio_path = None
-    
-    if audio_file.filename == '':
-        return jsonify({'error': 'No selected file'}), 400
-    
-    try:
-        # Geçici dosya yolu oluştur
-        temp_audio_path = os.path.join(UPLOAD_FOLDER, f'temp_audio_{uuid.uuid4()}.wav')
-        
-        # Gelen dosyayı kaydet
-        audio_file.save(temp_audio_path)
-        
-        # Transcribe işlemini gerçekleştir
-        transcription = transcribe_audio(temp_audio_path, model_name="base")
-        
-        if not transcription:
-            raise Exception("Empty transcription result")
-            
-        return jsonify({
-            'success': True,
-            'transcription': transcription
-        })
-        
-    except Exception as e:
-        return jsonify({
-            'success': False,
-            'error': f"Transcription failed: {str(e)}"
-        }), 500
-    finally:
-        # Geçici dosyayı temizle
-        if temp_audio_path and os.path.exists(temp_audio_path):
-            os.remove(temp_audio_path)
 
 
 if __name__ == '__main__':
